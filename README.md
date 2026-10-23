@@ -1,5 +1,9 @@
 # Snowflake schemachange + dbt: e-commerce lakehouse
 
+[![CI](https://github.com/flaviobrito/snowflake-schemachange/actions/workflows/ci.yml/badge.svg)](https://github.com/flaviobrito/snowflake-schemachange/actions/workflows/ci.yml)
+[![Deploy](https://github.com/flaviobrito/snowflake-schemachange/actions/workflows/deploy.yml/badge.svg)](https://github.com/flaviobrito/snowflake-schemachange/actions/workflows/deploy.yml)
+[![Scheduled data quality](https://github.com/flaviobrito/snowflake-schemachange/actions/workflows/scheduled.yml/badge.svg)](https://github.com/flaviobrito/snowflake-schemachange/actions/workflows/scheduled.yml)
+
 A production-style reference project that shows how to split responsibilities on
 Snowflake:
 
