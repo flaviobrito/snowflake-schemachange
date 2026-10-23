@@ -1,0 +1,205 @@
+version: 2
+
+# BRONZE tables are created and evolved by schemachange
+# (schemachange/scripts/versioned). Every physical column must be declared here:
+# the schema drift audit (models/audit) flags anything that diverges.
+# Source tests use severity "warn": raw data is reported, cleaned in SILVER,
+# and blocking checks live on SILVER/GOLD models.
+
+sources:
+  - name: ecommerce
+    description: Raw storefront exports landed by BRONZE.LOAD_FROM_STAGE().
+    database: "{{ target.database }}"
+    schema: BRONZE
+    config:
+      loaded_at_field: _loaded_at
+      freshness:
+        warn_after: {count: 24, period: hour}
+        error_after: {count: 72, period: hour}
+    tables:
+      - name: customers
+        identifier: CUSTOMERS
+        description: Storefront customer accounts. One row per account version exported.
+        data_tests:
+          - dbt_expectations.expect_table_row_count_to_be_between:
+              arguments:
+                min_value: 1
+              config:
+                severity: warn
+        columns:
+          - name: customer_id
+            data_type: text
+            description: Natural key from the storefront.
+            data_tests:
+              - not_null
+              - unique:
+                  config:
+                    severity: warn
+          - name: first_name
+            data_type: text
+          - name: last_name
+            data_type: text
+          - name: email
+            data_type: text
+            data_tests:
+              - is_valid_email:
+                  config:
+                    severity: warn
+          - name: phone
+            data_type: text
+          - name: country_code
+            data_type: text
+            description: ISO 3166-1 alpha-2 country code.
+          - name: state
+            data_type: text
+          - name: city
+            data_type: text
+          - name: created_at
+            data_type: timestamp_ntz
+          - name: updated_at
+            data_type: timestamp_ntz
+          - name: marketing_opt_in
+            data_type: boolean
+            description: Added in schemachange migration V1.3.0.
+          - &source_file
+            name: _source_file
+            data_type: text
+            description: Stage file the row was loaded from.
+          - &source_row_number
+            name: _source_row_number
+            data_type: number
+            description: Row number inside the source file.
+          - &loaded_at
+            name: _loaded_at
+            data_type: timestamp_tz
+            description: Load timestamp, used for source freshness.
+
+      - name: products
+        identifier: PRODUCTS
+        description: Product catalog.
+        columns:
+          - name: product_id
+            data_type: text
+            data_tests:
+              - not_null
+              - unique:
+                  config:
+                    severity: warn
+          - name: sku
+            data_type: text
+          - name: product_name
+            data_type: text
+          - name: category
+            data_type: text
+          - name: brand
+            data_type: text
+          - name: unit_price
+            data_type: number
+            data_tests:
+              - non_negative:
+                  config:
+                    severity: warn
+          - name: unit_cost
+            data_type: number
+          - name: is_active
+            data_type: boolean
+          - name: created_at
+            data_type: timestamp_ntz
+          - name: updated_at
+            data_type: timestamp_ntz
+          - *source_file
+          - *source_row_number
+          - *loaded_at
+
+      - name: orders
+        identifier: ORDERS
+        description: Order headers.
+        columns:
+          - name: order_id
+            data_type: text
+            data_tests:
+              - not_null
+              - unique:
+                  config:
+                    severity: warn
+          - name: customer_id
+            data_type: text
+            data_tests:
+              - relationships:
+                  arguments:
+                    to: source('ecommerce', 'customers')
+                    field: customer_id
+                  config:
+                    severity: warn
+          - name: order_status
+            data_type: text
+            data_tests:
+              - accepted_values:
+                  arguments:
+                    values: [placed, paid, shipped, delivered, cancelled, returned]
+                  config:
+                    severity: warn
+          - name: order_channel
+            data_type: text
+          - name: currency_code
+            data_type: text
+          - name: shipping_amount
+            data_type: number
+          - name: discount_amount
+            data_type: number
+          - name: ordered_at
+            data_type: timestamp_ntz
+          - name: updated_at
+            data_type: timestamp_ntz
+          - *source_file
+          - *source_row_number
+          - *loaded_at
+
+      - name: order_items
+        identifier: ORDER_ITEMS
+        description: Order line items.
+        columns:
+          - name: order_item_id
+            data_type: text
+            data_tests:
+              - not_null
+              - unique:
+                  config:
+                    severity: warn
+          - name: order_id
+            data_type: text
+          - name: product_id
+            data_type: text
+          - name: quantity
+            data_type: number
+          - name: unit_price
+            data_type: number
+            description: Price charged at order time.
+          - *source_file
+          - *source_row_number
+          - *loaded_at
+
+      - name: payments
+        identifier: PAYMENTS
+        description: Payment transactions.
+        columns:
+          - name: payment_id
+            data_type: text
+            data_tests:
+              - not_null
+              - unique:
+                  config:
+                    severity: warn
+          - name: order_id
+            data_type: text
+          - name: payment_method
+            data_type: text
+          - name: payment_status
+            data_type: text
+          - name: amount
+            data_type: number
+          - name: paid_at
+            data_type: timestamp_ntz
+          - *source_file
+          - *source_row_number
+          - *loaded_at

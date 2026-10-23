@@ -1,0 +1,45 @@
+name: Set up toolchain
+description: Install uv, Python dependencies and dbt packages; materialize the Snowflake private key.
+
+inputs:
+  private-key:
+    description: PEM-encoded PKCS#8 private key for key-pair authentication (leave empty to skip).
+    required: false
+    default: ""
+  private-key-passphrase:
+    description: Passphrase of an encrypted private key.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      with:
+        enable-cache: true
+        cache-dependency-glob: uv.lock
+
+    - name: Install Python dependencies
+      shell: bash
+      run: uv sync --frozen
+
+    - name: Install dbt packages
+      shell: bash
+      run: uv run dbt deps --project-dir dbt --profiles-dir dbt
+
+    - name: Write Snowflake private key
+      if: inputs.private-key != ''
+      shell: bash
+      env:
+        PRIVATE_KEY: ${{ inputs.private-key }}
+        PRIVATE_KEY_PASSPHRASE: ${{ inputs.private-key-passphrase }}
+      run: |
+        key_file="$RUNNER_TEMP/snowflake_rsa_key.p8"
+        umask 077
+        printf '%s\n' "$PRIVATE_KEY" > "$key_file"
+        echo "SNOWFLAKE_PRIVATE_KEY_FILE=$key_file" >> "$GITHUB_ENV"
+        if [ -n "$PRIVATE_KEY_PASSPHRASE" ]; then
+          echo "::add-mask::$PRIVATE_KEY_PASSPHRASE"
+          echo "SNOWFLAKE_PRIVATE_KEY_FILE_PWD=$PRIVATE_KEY_PASSPHRASE" >> "$GITHUB_ENV"
+        fi

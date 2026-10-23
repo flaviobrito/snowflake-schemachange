@@ -1,0 +1,7 @@
+# Default reviewers for every change.
+*                         @flaviobrito
+
+# Database migrations and CI/CD need an explicit review.
+/schemachange/            @flaviobrito
+/bootstrap/               @flaviobrito
+/.github/                 @flaviobrito

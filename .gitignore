@@ -1,0 +1,30 @@
+# Local notes kept out of version control
+arquitetura_monitoramento_schema.md
+
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Secrets
+.env
+*.p8
+*.pem
+keys/
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.user.yml
+logs/
+
+# Generated sample data
+data/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,31 @@
+name: PR cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  drop-clone:
+    name: Drop pull request database
+    if: vars.SNOWFLAKE_ACCOUNT != '' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ci
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ vars.SNOWFLAKE_USER }}
+      SNOWFLAKE_ROLE: ECOMMERCE_DEPLOYER
+      SNOWFLAKE_WAREHOUSE: ECOMMERCE_WH
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/setup-snowflake
+        with:
+          private-key: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+          private-key-passphrase: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+
+      - name: Drop ECOMMERCE_PR_${{ github.event.pull_request.number }}
+        run: uv run python -m ops.manage_database drop --target "ECOMMERCE_PR_${{ github.event.pull_request.number }}"

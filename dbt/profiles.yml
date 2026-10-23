@@ -1,0 +1,21 @@
+# All connection settings come from environment variables (see .env.example).
+# The target only labels the environment; the database is what isolates it.
+ecommerce:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    dev: &snowflake
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      authenticator: snowflake_jwt
+      private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_FILE') }}"
+      private_key_passphrase: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_FILE_PWD', '') }}"
+      role: "{{ env_var('DBT_SNOWFLAKE_ROLE', 'ECOMMERCE_TRANSFORMER') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'ECOMMERCE_WH') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE') }}"
+      schema: SILVER
+      threads: 8
+      client_session_keep_alive: false
+      reuse_connections: true
+    ci: *snowflake
+    prod: *snowflake

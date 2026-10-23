@@ -1,0 +1,68 @@
+name: Scheduled data quality
+
+on:
+  schedule:
+    - cron: "0 9 * * *" # 09:00 UTC daily
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
+  SNOWFLAKE_USER: ${{ vars.SNOWFLAKE_USER }}
+  SNOWFLAKE_ROLE: ECOMMERCE_DEPLOYER
+  SNOWFLAKE_WAREHOUSE: ECOMMERCE_WH
+  SNOWFLAKE_AUTHENTICATOR: snowflake_jwt
+  SNOWFLAKE_DATABASE: ECOMMERCE_PROD
+  DBT_SNOWFLAKE_ROLE: ECOMMERCE_TRANSFORMER
+  DBT_PROFILES_DIR: dbt
+  DBT_PROJECT_DIR: dbt
+  DBT_TARGET: prod
+  GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  monitor:
+    name: Freshness, schema drift and data tests (PROD)
+    if: vars.SNOWFLAKE_ACCOUNT != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production-monitoring
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/setup-snowflake
+        with:
+          private-key: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+          private-key-passphrase: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+
+      - name: Source freshness
+        id: freshness
+        continue-on-error: ${{ vars.FRESHNESS_BLOCKING != 'true' }}
+        run: uv run dbt source freshness
+
+      - name: Refresh schema audit
+        run: uv run dbt run --select tag:schema_audit
+
+      - name: Schema drift alert
+        env:
+          SCHEMA_ALERT_WEBHOOK_URL: ${{ secrets.SCHEMA_ALERT_WEBHOOK_URL }}
+        run: uv run python -m ops.check_schema_drift --fail-on-drift
+
+      - name: dbt build
+        run: uv run dbt build --exclude-resource-type unit_test
+
+      - name: Upload dbt artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dbt-artifacts-scheduled
+          path: |
+            dbt/target/run_results.json
+            dbt/target/sources.json
+          retention-days: 14
+          if-no-files-found: ignore

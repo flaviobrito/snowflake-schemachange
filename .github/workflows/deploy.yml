@@ -1,0 +1,163 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**/*.md", "docs/**", ".github/dependabot.yml"]
+  workflow_dispatch:
+    inputs:
+      load_sample_data:
+        description: Generate and load synthetic data into BRONZE before building
+        type: boolean
+        default: false
+      full_refresh:
+        description: Rebuild incremental models from scratch
+        type: boolean
+        default: false
+
+# Never cancel a deployment halfway through a migration.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
+  SNOWFLAKE_USER: ${{ vars.SNOWFLAKE_USER }}
+  SNOWFLAKE_ROLE: ECOMMERCE_DEPLOYER
+  SNOWFLAKE_WAREHOUSE: ECOMMERCE_WH
+  SNOWFLAKE_AUTHENTICATOR: snowflake_jwt
+  DBT_SNOWFLAKE_ROLE: ECOMMERCE_TRANSFORMER
+  DBT_PROFILES_DIR: dbt
+  DBT_PROJECT_DIR: dbt
+  ENABLE_DATA_METRIC_FUNCTIONS: ${{ vars.ENABLE_DATA_METRIC_FUNCTIONS || 'true' }}
+  FULL_REFRESH_FLAG: ${{ inputs.full_refresh && '--full-refresh' || '' }}
+
+jobs:
+  dev:
+    name: Deploy DEV
+    if: vars.SNOWFLAKE_ACCOUNT != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: dev
+    env:
+      SNOWFLAKE_DATABASE: ECOMMERCE_DEV
+      DBT_TARGET: dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/setup-snowflake
+        with:
+          private-key: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+          private-key-passphrase: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+
+      - name: schemachange deploy
+        run: uv run schemachange deploy --config-folder schemachange
+
+      - name: Load sample data
+        if: inputs.load_sample_data
+        run: |
+          uv run python -m ops.generate_sample_data --output-dir data/sample
+          uv run python -m ops.load_sample_data --input-dir data/sample
+
+      - name: dbt build
+        run: uv run dbt build $FULL_REFRESH_FLAG
+
+      - name: Upload manifest (state for slim CI)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dbt-manifest-dev
+          path: dbt/target/manifest.json
+          retention-days: 30
+
+  prod:
+    name: Deploy PROD
+    needs: dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Configure required reviewers on the "production" environment for a manual gate.
+    environment: production
+    env:
+      SNOWFLAKE_DATABASE: ECOMMERCE_PROD
+      DBT_TARGET: prod
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/setup-snowflake
+        with:
+          private-key: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+          private-key-passphrase: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+
+      # Instant rollback point: see docs/runbook.md.
+      - name: Pre-deployment backup (zero-copy clone)
+        run: uv run python -m ops.manage_database clone --source ECOMMERCE_PROD --target ECOMMERCE_PROD_PREDEPLOY
+
+      - name: schemachange plan
+        run: uv run schemachange deploy --config-folder schemachange --schemachange-dry-run
+
+      - name: schemachange deploy
+        run: uv run schemachange deploy --config-folder schemachange
+
+      - name: Load sample data
+        if: inputs.load_sample_data
+        run: |
+          uv run python -m ops.generate_sample_data --output-dir data/sample
+          uv run python -m ops.load_sample_data --input-dir data/sample
+
+      # Unit tests already ran in CI and DEV; production runs models and data tests.
+      - name: dbt build
+        run: uv run dbt build --exclude-resource-type unit_test $FULL_REFRESH_FLAG
+
+      - name: dbt docs
+        run: |
+          uv run dbt docs generate --static
+          mkdir -p site
+          cp dbt/target/static_index.html site/index.html
+
+      - name: Upload docs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dbt-docs
+          path: site
+          retention-days: 30
+
+      - name: Upload dbt artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dbt-artifacts-prod
+          path: |
+            dbt/target/run_results.json
+            dbt/target/manifest.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+  pages:
+    name: Publish dbt docs
+    needs: prod
+    # GitHub Pages on private repositories requires a paid plan; opt in with ENABLE_PAGES=true.
+    if: vars.ENABLE_PAGES == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dbt-docs
+          path: site
+
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

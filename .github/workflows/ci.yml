@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
+  SNOWFLAKE_USER: ${{ vars.SNOWFLAKE_USER }}
+  SNOWFLAKE_ROLE: ECOMMERCE_DEPLOYER
+  SNOWFLAKE_WAREHOUSE: ECOMMERCE_WH
+  SNOWFLAKE_AUTHENTICATOR: snowflake_jwt
+  DBT_SNOWFLAKE_ROLE: ECOMMERCE_TRANSFORMER
+  DBT_PROFILES_DIR: dbt
+  DBT_PROJECT_DIR: dbt
+  ENABLE_DATA_METRIC_FUNCTIONS: ${{ vars.ENABLE_DATA_METRIC_FUNCTIONS || 'true' }}
+
+jobs:
+  static-checks:
+    name: Static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Placeholders: parsing and rendering never open a Snowflake connection.
+      SNOWFLAKE_ACCOUNT: offline
+      SNOWFLAKE_USER: offline
+      SNOWFLAKE_DATABASE: ECOMMERCE_CI
+      SNOWFLAKE_PRIVATE_KEY_FILE: /dev/null
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/setup-snowflake
+
+      - name: Ruff
+        run: |
+          uv run ruff check --output-format=github .
+          uv run ruff format --check .
+
+      - name: Python unit tests
+        run: uv run pytest
+
+      - name: sqlfluff
+        run: uv run sqlfluff lint dbt/models dbt/tests --format github-annotation-native
+
+      - name: dbt parse
+        run: |
+          uv run dbt parse --warn-error-options '{"error": ["Deprecations"]}'
+
+      - name: Render schemachange scripts
+        run: |
+          set -euo pipefail
+          for script in $(find schemachange/scripts -name '*.sql' | sort); do
+            echo "::group::$script"
+            uv run schemachange render --config-folder schemachange "$script"
+            echo "::endgroup::"
+          done
+
+  integration:
+    name: Deploy and test on a zero-copy clone
+    needs: static-checks
+    # Needs Snowflake credentials: skipped for forks and before the account is configured.
+    if: vars.SNOWFLAKE_ACCOUNT != '' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ci
+    env:
+      SNOWFLAKE_DATABASE: ECOMMERCE_PR_${{ github.event.pull_request.number }}
+      DBT_TARGET: ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/setup-snowflake
+        with:
+          private-key: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+          private-key-passphrase: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+
+      # The clone carries DEV data, built models and schemachange history,
+      # so only the migrations introduced by this pull request are applied.
+      - name: Clone ECOMMERCE_DEV
+        run: uv run python -m ops.manage_database clone --source ECOMMERCE_DEV --target "$SNOWFLAKE_DATABASE"
+
+      - name: schemachange plan
+        run: uv run schemachange deploy --config-folder schemachange --schemachange-dry-run
+
+      - name: schemachange deploy
+        run: uv run schemachange deploy --config-folder schemachange
+
+      - name: Fetch DEV manifest for slim CI
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow deploy.yml --branch main \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$run_id" ] && gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+              --name dbt-manifest-dev --dir dbt/state; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No DEV manifest found, running a full build."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Unmodified upstream models already exist in the clone, so modified
+      # models and their children are enough; schema audit always runs.
+      - name: dbt build
+        run: |
+          if [ "${{ steps.state.outputs.available }}" = "true" ]; then
+            uv run dbt build --select state:modified+ tag:schema_audit --state dbt/state
+          else
+            uv run dbt build
+          fi
+
+      - name: Upload dbt artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dbt-artifacts-pr-${{ github.event.pull_request.number }}
+          path: |
+            dbt/target/run_results.json
+            dbt/target/manifest.json
+            dbt/logs/dbt.log
+          retention-days: 7
+          if-no-files-found: ignore

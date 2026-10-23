@@ -1,0 +1,23 @@
+# schemachange configuration (config-version 2).
+#
+# Connection settings (account, user, key file) are never stored here: they are
+# read from SNOWFLAKE_* environment variables, injected locally from .env and in
+# CI from GitHub secrets/variables. The target database is the only thing that
+# changes between environments (DEV, PROD, PR clones).
+config-version: 2
+
+schemachange:
+  root-folder: schemachange/scripts
+  modules-folder: schemachange/modules
+  change-history-table: "{{ env_var('SNOWFLAKE_DATABASE') }}.SCHEMACHANGE.CHANGE_HISTORY"
+  create-change-history-table: true
+  query-tag: schemachange-ecommerce
+  log-level: INFO
+  vars:
+    database: "{{ env_var('SNOWFLAKE_DATABASE') }}"
+    warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'ECOMMERCE_WH') }}"
+    deployer_role: ECOMMERCE_DEPLOYER
+    transformer_role: ECOMMERCE_TRANSFORMER
+    reader_role: ECOMMERCE_READER
+    # Snowflake Data Metric Functions require Enterprise edition or higher.
+    enable_data_metric_functions: "{{ env_var('ENABLE_DATA_METRIC_FUNCTIONS', 'true') }}"
