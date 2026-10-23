@@ -123,7 +123,6 @@ flowchart LR
     MERGE[Merge to main] --> DEV[DEV: migrate · build]
     DEV --> GATE{{production<br/>approval}}
     GATE --> PROD[PROD: backup clone · migrate · build · docs]
-    PROD --> PAGES[GitHub Pages<br/>optional]
     CRON[Daily 09:00 UTC] --> MON[PROD: freshness · drift alert · data tests]
     CLOSE[PR closed] --> DROP[Drop ECOMMERCE_PR_n]
 ```
@@ -131,7 +130,7 @@ flowchart LR
 | Workflow        | Trigger              | What it does                                                         |
 | --------------- | -------------------- | -------------------------------------------------------------------- |
 | `ci.yml`        | pull request         | Offline checks; then migrations and slim `dbt build` on a zero-copy clone |
-| `deploy.yml`    | push to `main`, manual | DEV, then PROD behind the `production` environment; docs artifact and Pages |
+| `deploy.yml`    | push to `main`, manual | DEV, then PROD behind the `production` environment; dbt docs as a downloadable artifact |
 | `scheduled.yml` | daily, manual        | Source freshness, schema drift alert, full data test suite on PROD   |
 | `pr-cleanup.yml`| pull request closed  | Drops the pull request database                                       |
 
@@ -172,12 +171,11 @@ uv run python -m ops.generate_sample_data --inject-anomalies
 | Variable    | `SNOWFLAKE_ACCOUNT`                 | `<org>-<account>`; workflows that need Snowflake are skipped while empty |
 | Variable    | `SNOWFLAKE_USER`                    | `SVC_ECOMMERCE_CICD`                          |
 | Variable    | `ENABLE_DATA_METRIC_FUNCTIONS`      | `false` on Standard edition (default `true`)  |
-| Variable    | `ENABLE_PAGES`                      | `true` to publish dbt docs to GitHub Pages    |
 | Variable    | `FRESHNESS_BLOCKING`                | `true` to fail the scheduled run on stale sources |
 | Secret      | `SNOWFLAKE_PRIVATE_KEY`             | PKCS#8 private key (PEM)                       |
 | Secret      | `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE`  | Key passphrase, if encrypted                   |
 | Secret      | `SCHEMA_ALERT_WEBHOOK_URL`          | Slack or Teams incoming webhook (optional)     |
-| Environment | `ci`, `dev`, `production`, `production-monitoring`, `github-pages` | Add required reviewers to `production` |
+| Environment | `ci`, `dev`, `production`, `production-monitoring` | Add required reviewers to `production` |
 
 ## License
 
